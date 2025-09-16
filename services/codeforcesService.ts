@@ -395,9 +395,15 @@ export const fetchEditorial = async (tutorialUrl: string, contestId: number, pro
                         const contentWrapper = document.createElement('div');
                         contentWrapper.className = 'spoiler-content-wrapper';
                         
-                        // FIX: Directly copy the innerHTML of the spoiler content.
-                        // This is more robust than trying to find nested elements.
-                        contentWrapper.innerHTML = contentEl.innerHTML;
+                        let contentSourceEl = contentEl;
+                        // Handle cases where content is wrapped in another .ttypography div
+                        const nestedTypography = contentEl.querySelector('.ttypography');
+                        if (nestedTypography) {
+                           contentSourceEl = nestedTypography;
+                        }
+
+                        // More robustly copy the content instead of moving nodes
+                        contentWrapper.innerHTML = contentSourceEl.innerHTML;
                         
                         details.appendChild(contentWrapper);
                         solutionParts.push(details);
