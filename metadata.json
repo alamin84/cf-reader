@@ -1,0 +1,5 @@
+{
+  "name": "Codeforces Problem Viewer",
+  "description": "An application to browse Codeforces problems within a specified rating range, view problem statements, and read AI-generated solutions and code editorials. Users can also bookmark problems and mark them as read for tracking progress.",
+  "requestFramePermissions": []
+}
