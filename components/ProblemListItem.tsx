@@ -1,20 +1,15 @@
+
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Problem } from '../types';
 import { useStatusManager } from '../hooks/useStatusManager';
-import { useOffline } from '../context/OfflineContext';
 import BookmarkIcon from './BookmarkIcon';
 import ReadIcon from './ReadIcon';
-import DownloadIcon from './DownloadIcon';
 
 const ProblemListItem: React.FC<{ problem: Problem }> = ({ problem }) => {
   const { toggleBookmark, toggleRead, getStatus } = useStatusManager();
-  const { isOffline, isDownloading, downloadProblem, deleteProblem } = useOffline();
   
-  const problemKey = `${problem.contestId}-${problem.index}`;
   const { bookmarked, read } = getStatus(problem.contestId, problem.index);
-  const offline = isOffline(problemKey);
-  const downloading = isDownloading(problemKey);
 
   const handleBookmarkClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -28,19 +23,6 @@ const ProblemListItem: React.FC<{ problem: Problem }> = ({ problem }) => {
     toggleRead(problem.contestId, problem.index);
   };
   
-  const handleDownloadClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    if (offline) {
-      if (window.confirm('Are you sure you want to delete this problem from offline storage?')) {
-        deleteProblem(problemKey);
-      }
-    } else {
-      downloadProblem(problem);
-    }
-  };
-
-
   return (
     <Link to={`/problem/${problem.contestId}/${problem.index}`} state={{ problem }} className="block bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800/50 transition-colors p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
       <div className="flex justify-between items-start">
@@ -58,9 +40,6 @@ const ProblemListItem: React.FC<{ problem: Problem }> = ({ problem }) => {
           </div>
         </div>
         <div className="flex flex-col sm:flex-row items-center gap-3">
-          <button onClick={handleDownloadClick} title={offline ? 'Delete from offline' : 'Download for offline'} disabled={downloading}>
-              <DownloadIcon isDownloading={downloading} isOffline={offline} />
-          </button>
           <button onClick={handleBookmarkClick} title={bookmarked ? 'Remove bookmark' : 'Bookmark problem'}>
             <BookmarkIcon isBookmarked={bookmarked} />
           </button>

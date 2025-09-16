@@ -1,6 +1,8 @@
+
 import { Problem, Content } from '../types';
 
 const API_URL = 'https://codeforces.com/api/problemset.problems';
+// Switched to a more reliable CORS proxy to fix fetching issues.
 const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
 
 interface CodeforcesResponse {
@@ -143,6 +145,7 @@ const cleanCodeforcesHtml = (contentEl: Element): void => {
 
 export const fetchProblems = async (): Promise<Problem[]> => {
   try {
+    // Note: The Codeforces API supports CORS, so no proxy is needed here.
     const response = await fetch(API_URL);
     if (!response.ok) {
       throw new Error('Network response was not ok');
@@ -225,7 +228,7 @@ export const fetchProblemStatementHTML = async (contestId: number, index: string
         }
     });
     
-    // Clean the HTML using local DOM manipulation instead of an AI service
+    // Clean the HTML using local DOM manipulation
     cleanCodeforcesHtml(problemStatementNode);
     const cleanedHtml = problemStatementNode.innerHTML;
 
@@ -262,7 +265,7 @@ interface EditorialPayload {
   };
 }
 
-export const fetchEditorial = async (tutorialUrl: string, problemId: string): Promise<EditorialPayload | { error: string }> => {
+export const fetchEditorial = async (tutorialUrl: string, contestId: number, problemId: string): Promise<EditorialPayload | { error: string }> => {
     try {
         const response = await fetchWithTimeout(`${CORS_PROXY}${encodeURIComponent(tutorialUrl)}`);
         if (!response.ok) {
@@ -279,55 +282,143 @@ export const fetchEditorial = async (tutorialUrl: string, problemId: string): Pr
         }
 
         const problemLinks = Array.from(editorialNode.querySelectorAll('a'));
-        const problemAnchor = problemLinks.find(a => (a.textContent || '').trim().startsWith(problemId));
         
+        const problemAnchor = problemLinks.find(a => {
+            const text = (a.textContent || '').trim();
+            const href = (a.getAttribute('href') || '');
+
+            // Priority 1: Href attribute is the most reliable identifier
+            if (href.includes(`/contest/${contestId}/problem/${problemId}`) || href.endsWith(`/problem/${problemId}`)) {
+                return true;
+            }
+
+            // Priority 2: Text matches common Codeforces patterns
+            const fullProblemId = `${contestId}${problemId}`;
+            const textPatterns = [
+                `^${fullProblemId}`,             // e.g., "1234C"
+                `^${problemId}[\\s.:-]`,         // e.g., "C.", "C:", "C -"
+                `^${problemId}$`,                // e.g., "C"
+                `^Problem\\s+${problemId}\\b`    // e.g., "Problem C"
+            ];
+            const regex = new RegExp(textPatterns.join('|'), 'i');
+            
+            if (regex.test(text)) {
+                return true;
+            }
+            
+            return false;
+        });
+
         if (!problemAnchor) {
             throw new Error(`Could not find a section for problem ${problemId} in the editorial.`);
         }
 
         const solutionParts: Element[] = [];
-        let cppCode = '';
-        let pythonCode = '';
+        const foundCodes: { title: string, content: string, language: 'cpp' | 'python' }[] = [];
         
         let startNode = problemAnchor.closest('p, h1, h2, h3, h4, h5, h6');
         let currentNode = startNode ? startNode.nextElementSibling : null;
 
+        let parsingState: 'solution' | 'code' = 'solution';
+
         while (currentNode) {
-            const nextProblemLink = currentNode.querySelector('a');
-            if (nextProblemLink && (nextProblemLink.textContent || '').trim().match(/^\d+[A-Z]/) && nextProblemLink !== problemAnchor) {
-                break; 
+            // Stop if we encounter a heading for a different problem or a horizontal rule.
+            const potentialHeaderLink = currentNode.querySelector('a');
+            if (potentialHeaderLink) {
+                const href = potentialHeaderLink.getAttribute('href') || '';
+                const isProblemLink = href.includes('/contest/') && href.includes('/problem/');
+                const isCurrentProblemLink = href.includes(`/contest/${contestId}/problem/${problemId}`);
+                
+                // This heuristic assumes that a link to another problem in a top-level element marks a new section.
+                if (isProblemLink && !isCurrentProblemLink) {
+                    const parentText = (currentNode.textContent || '').trim();
+                    const linkText = (potentialHeaderLink.textContent || '').trim();
+                    if (parentText.startsWith(linkText)) {
+                        break;
+                    }
+                }
             }
+            
             if (currentNode.tagName.toLowerCase() === 'hr') {
                 break;
             }
 
-            // Check for code spoilers first
+            // Determine if the current node is a code spoiler
+            let isCodeNode = false;
+            let codeInfo = null;
+
             if (currentNode.classList.contains('spoiler')) {
                 const titleEl = currentNode.querySelector('.spoiler-title');
                 const contentEl = currentNode.querySelector('.spoiler-content');
-                
-                if (titleEl && contentEl) {
-                    const titleText = (titleEl.textContent || '').toLowerCase().trim();
-                    const isCodeSpoiler = titleText.includes('code');
+                const preTag = contentEl?.querySelector('pre');
 
-                    if (isCodeSpoiler) {
-                       if (!cppCode && (titleText.includes('c++') || titleText.includes('cpp'))) {
-                            const preTag = contentEl.querySelector('pre');
-                            cppCode = preTag?.textContent || '';
-                        }
-                        if (!pythonCode && titleText.includes('python')) {
-                            const preTag = contentEl.querySelector('pre');
-                            pythonCode = preTag?.textContent || '';
-                        }
-                    } else {
-                       // Not a code spoiler, so add it to the solution
-                       solutionParts.push(currentNode);
+                if (titleEl && contentEl && preTag) {
+                    const titleText = (titleEl.textContent || '').toLowerCase().trim();
+                    const isCpp = titleText.includes('c++') || titleText.includes('cpp');
+                    const isPython = titleText.includes('python');
+                    const isSolutionCode = /^solution\s*\d*$/.test(titleText);
+                    const isGenericCode = titleText.includes('code');
+
+                    if (isCpp || isPython || isSolutionCode || isGenericCode) {
+                        isCodeNode = true;
+                        const codeContent = preTag.textContent || '';
+                        const language = isCpp ? 'cpp' : isPython ? 'python' : 'cpp';
+                        codeInfo = {
+                            title: titleEl.textContent || 'Code',
+                            content: codeContent,
+                            language: language,
+                        };
                     }
                 }
-            } else {
-                 // Not a spoiler at all, add it to the solution
-                 solutionParts.push(currentNode);
             }
+
+            // If we find a code node for the first time, switch state
+            if (isCodeNode && parsingState === 'solution') {
+                parsingState = 'code';
+            }
+
+            // Process based on state
+            if (parsingState === 'solution') {
+                // In solution state, append everything to solutionParts
+                if (currentNode.classList.contains('spoiler')) {
+                    const titleEl = currentNode.querySelector('.spoiler-title');
+                    const contentEl = currentNode.querySelector('.spoiler-content');
+                    if(titleEl && contentEl) {
+                        const details = document.createElement('details');
+                        details.open = true;
+                        details.classList.add('editorial-spoiler');
+                        
+                        const summary = document.createElement('summary');
+                        summary.textContent = titleEl.textContent;
+                        details.appendChild(summary);
+
+                        const contentWrapper = document.createElement('div');
+                        contentWrapper.className = 'spoiler-content-wrapper';
+                        
+                        let contentSourceEl = contentEl;
+                        // Handle cases where content is wrapped in another .ttypography div
+                        const nestedTypography = contentEl.querySelector('.ttypography');
+                        if (nestedTypography) {
+                           contentSourceEl = nestedTypography;
+                        }
+
+                        // More robustly copy the content instead of moving nodes
+                        contentWrapper.innerHTML = contentSourceEl.innerHTML;
+                        
+                        details.appendChild(contentWrapper);
+                        solutionParts.push(details);
+                    }
+                } else {
+                    solutionParts.push(currentNode);
+                }
+            } 
+            
+            if (isCodeNode && codeInfo) {
+                // If the node is code, always add it to foundCodes,
+                // regardless of whether we just switched state or were already in code state.
+                foundCodes.push(codeInfo);
+            }
+            
             currentNode = currentNode.nextElementSibling;
         }
 
@@ -335,19 +426,29 @@ export const fetchEditorial = async (tutorialUrl: string, problemId: string): Pr
         solutionParts.forEach(part => solutionContainer.appendChild(part.cloneNode(true)));
         
         fixRelativeUrls(solutionContainer);
-        cleanCodeforcesHtml(solutionContainer);
-        let finalSolution = solutionContainer.innerHTML;
 
+        // Apply cleaning to the main container AND to the content of each spoiler
+        cleanCodeforcesHtml(solutionContainer);
+        solutionContainer.querySelectorAll('.editorial-spoiler .spoiler-content-wrapper').forEach(spoilerContent => {
+            cleanCodeforcesHtml(spoilerContent);
+        });
+
+        let finalSolution = solutionContainer.innerHTML;
 
         if (!finalSolution.trim()) {
           finalSolution = `<p>Could not automatically parse the solution text for problem <b>${problemId}</b>. The editorial might use a non-standard format.</p>`;
         }
         
         let finalCode: EditorialPayload['code'] = { content: `// Could not find code for problem ${problemId}.`, language: 'text' };
-        if (cppCode) {
-            finalCode = { content: cppCode, language: 'cpp' };
-        } else if (pythonCode) {
-            finalCode = { content: pythonCode, language: 'python' };
+
+        if (foundCodes.length > 0) {
+            const finalCodeContent = foundCodes.map(c => 
+                `// Source: ${c.title}\n\n${c.content.trim()}`
+            ).join('\n\n// --- End of Code Block ---\n\n');
+            
+            const finalCodeLanguage = foundCodes.some(c => c.language === 'cpp') ? 'cpp' : foundCodes[0].language;
+
+            finalCode = { content: finalCodeContent, language: finalCodeLanguage };
         }
 
         return { solution: finalSolution, code: finalCode };
@@ -375,8 +476,7 @@ export const fetchProblemContent = async (contestId: number, index: string): Pro
         let codeContent: Content['Code'] = { content: '// No official editorial found.', language: 'text' };
 
         if (tutorialUrl) {
-            const problemId = `${contestId}${index}`;
-            const editorialPayload = await fetchEditorial(tutorialUrl, problemId);
+            const editorialPayload = await fetchEditorial(tutorialUrl, contestId, index);
             if ('error' in editorialPayload) {
                 solutionContent = `<p>Failed to load editorial: ${editorialPayload.error}</p>`;
             } else {

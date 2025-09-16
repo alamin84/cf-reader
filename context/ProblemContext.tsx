@@ -1,7 +1,8 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Problem } from '../types';
-import { fetchProblems } from '../services/codeforcesService';
+import { Problem, OfflineProblem } from '../types';
+
+const OFFLINE_PROBLEMS_KEY = 'codeforcesOfflineProblems';
 
 interface ProblemContextType {
   problems: Problem[];
@@ -17,21 +18,39 @@ export const ProblemProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const loadProblems = async () => {
+    const loadProblemsFromStorage = () => {
       try {
         setLoading(true);
-        const fetchedProblems = await fetchProblems();
-        setProblems(fetchedProblems);
+        const item = window.localStorage.getItem(OFFLINE_PROBLEMS_KEY);
+        const offlineProblems: { [key: string]: OfflineProblem } = item ? JSON.parse(item) : {};
+        
+        const downloadedProblems = Object.values(offlineProblems)
+            .map(p => p.problem)
+            .sort((a, b) => b.contestId - a.contestId); // Sort by newest first
+
+        setProblems(downloadedProblems);
         setError(null);
       } catch (e) {
-        setError('Failed to load problems.');
+        setError('Failed to load problems from local storage.');
         console.error(e);
       } finally {
         setLoading(false);
       }
     };
 
-    loadProblems();
+    loadProblemsFromStorage();
+
+    const handleStorageChange = (event: StorageEvent) => {
+        if (event.key === OFFLINE_PROBLEMS_KEY) {
+            loadProblemsFromStorage();
+        }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+        window.removeEventListener('storage', handleStorageChange);
+    };
   }, []);
 
   return (

@@ -1,15 +1,23 @@
+
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Problem, OfflineProblem } from '../types';
-import { fetchProblemContent } from '../services/codeforcesService';
+import { fetchProblemContent, fetchProblems } from '../services/codeforcesService';
 
 const OFFLINE_PROBLEMS_KEY = 'codeforcesOfflineProblems';
+
+interface DownloadProgress {
+    current: number;
+    total: number;
+    message: string;
+}
 
 interface OfflineContextType {
   offlineProblems: { [key: string]: OfflineProblem };
   isOffline: (key: string) => boolean;
-  isDownloading: (key: string) => boolean;
-  downloadProblem: (problem: Problem) => Promise<void>;
-  deleteProblem: (key: string) => void;
+  isDownloading: boolean;
+  downloadProgress: DownloadProgress;
+  downloadProblemSet: (minRating: number, maxRating: number, count: number) => Promise<void>;
+  clearAllProblems: () => void;
 }
 
 const OfflineContext = createContext<OfflineContextType | undefined>(undefined);
@@ -26,11 +34,13 @@ const getInitialOfflineProblems = (): { [key: string]: OfflineProblem } => {
 
 export const OfflineProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [offlineProblems, setOfflineProblems] = useState<{ [key: string]: OfflineProblem }>(getInitialOfflineProblems);
-  const [downloading, setDownloading] = useState<Set<string>>(new Set());
+  const [isDownloadingSet, setIsDownloadingSet] = useState<boolean>(false);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({ current: 0, total: 0, message: '' });
 
   useEffect(() => {
     try {
       window.localStorage.setItem(OFFLINE_PROBLEMS_KEY, JSON.stringify(offlineProblems));
+      window.dispatchEvent(new StorageEvent('storage', { key: OFFLINE_PROBLEMS_KEY }));
     } catch (error) {
       console.error('Error writing offline problems to localStorage', error);
     }
@@ -38,52 +48,57 @@ export const OfflineProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   const getProblemKey = (p: Problem) => `${p.contestId}-${p.index}`;
 
-  const downloadProblem = async (problem: Problem) => {
-    const key = getProblemKey(problem);
-    if (downloading.has(key) || key in offlineProblems) return;
+  const downloadProblemSet = async (minRating: number, maxRating: number, count: number) => {
+    if (isDownloadingSet) return;
 
-    setDownloading(prev => new Set(prev).add(key));
+    setIsDownloadingSet(true);
+    setDownloadProgress({ current: 0, total: count, message: 'Fetching problem list...' });
 
     try {
-      const content = await fetchProblemContent(problem.contestId, problem.index);
+        const allProblems = await fetchProblems();
+        const filteredProblems = allProblems
+            .filter(p => p.rating && p.rating >= minRating && p.rating <= maxRating)
+            .slice(0, count);
 
-      setOfflineProblems(prev => ({
-        ...prev,
-        [key]: { problem, content, downloadedAt: Date.now() },
-      }));
+        setDownloadProgress({ current: 0, total: filteredProblems.length, message: 'Starting downloads...' });
+
+        const newOfflineProblems: { [key: string]: OfflineProblem } = {};
+        for (let i = 0; i < filteredProblems.length; i++) {
+            const problem = filteredProblems[i];
+            const key = getProblemKey(problem);
+            setDownloadProgress({ current: i + 1, total: filteredProblems.length, message: `Downloading: ${problem.name}`});
+            
+            const content = await fetchProblemContent(problem.contestId, problem.index);
+            newOfflineProblems[key] = { problem, content, downloadedAt: Date.now() };
+        }
+        
+        setOfflineProblems(newOfflineProblems); // This triggers the override
+        setDownloadProgress({ current: filteredProblems.length, total: filteredProblems.length, message: 'Download complete!' });
 
     } catch (error: any) {
-      console.error(`Failed to download problem ${key}:`, error);
-      setOfflineProblems(prev => ({
-        ...prev,
-        [key]: { problem, content: { error: error.message || 'An unknown error occurred.' }, downloadedAt: Date.now() },
-      }));
+        console.error('Failed to download problem set:', error);
+        setDownloadProgress(prev => ({ ...prev, message: `Error: ${error.message || 'Unknown error'}` }));
     } finally {
-      setDownloading(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(key);
-        return newSet;
-      });
+        setIsDownloadingSet(false);
+         setTimeout(() => {
+             setDownloadProgress({ current: 0, total: 0, message: '' });
+        }, 5000);
     }
   };
 
-  const deleteProblem = (key: string) => {
-    setOfflineProblems(prev => {
-      const newProblems = { ...prev };
-      delete newProblems[key];
-      return newProblems;
-    });
+  const clearAllProblems = () => {
+    setOfflineProblems({});
   };
-
+  
   const isOffline = (key: string) => key in offlineProblems;
-  const isDownloading = (key: string) => downloading.has(key);
 
   const value = {
     offlineProblems,
     isOffline,
-    isDownloading,
-    downloadProblem,
-    deleteProblem
+    isDownloading: isDownloadingSet,
+    downloadProgress,
+    downloadProblemSet,
+    clearAllProblems,
   };
 
   return (

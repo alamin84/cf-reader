@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useLocation, Link, useNavigate } from 'react-router-dom';
 import { useProblems } from '../context/ProblemContext';
@@ -9,7 +10,6 @@ import { useStatusManager } from '../hooks/useStatusManager';
 import { useOffline } from '../context/OfflineContext';
 import BookmarkIcon from '../components/BookmarkIcon';
 import ReadIcon from '../components/ReadIcon';
-import DownloadIcon from '../components/DownloadIcon';
 import { fetchProblemContent } from '../services/codeforcesService';
 
 // Add marked and MathJax to the global window type
@@ -26,7 +26,7 @@ const ProblemDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const { problems, loading: problemsLoading } = useProblems();
   const { toggleBookmark, toggleRead, getStatus } = useStatusManager();
-  const { offlineProblems, downloadProblem, deleteProblem, isOffline, isDownloading } = useOffline();
+  const { offlineProblems } = useOffline();
   
   const [problem, setProblem] = useState<Problem | null>(state?.problem || null);
   const [activeTab, setActiveTab] = useState('Problem');
@@ -34,15 +34,11 @@ const ProblemDetailPage: React.FC = () => {
   const [loadingContent, setLoadingContent] = useState(true);
 
   const contentRef = useRef<HTMLDivElement>(null);
-  const problemKey = useMemo(() => problem ? `${problem.contestId}-${problem.index}` : '', [problem]);
 
   const { bookmarked, read } = useMemo(() => {
     return problem ? getStatus(problem.contestId, problem.index) : { bookmarked: false, read: false };
   }, [problem, getStatus]);
   
-  const offline = isOffline(problemKey);
-  const downloading = isDownloading(problemKey);
-
   const handleBookmarkClick = () => {
     if (problem) toggleBookmark(problem.contestId, problem.index);
   };
@@ -50,19 +46,6 @@ const ProblemDetailPage: React.FC = () => {
   const handleReadClick = () => {
     if (problem) toggleRead(problem.contestId, problem.index);
   };
-  
-  const handleDownloadClick = () => {
-    if (!problem) return;
-    if (offline) {
-        if(window.confirm('Are you sure you want to delete this problem from offline storage?')) {
-            deleteProblem(problemKey);
-            navigate(-1); // Go back to the previous page to prevent re-download
-        }
-    } else {
-        downloadProblem(problem);
-    }
-  };
-
 
   useEffect(() => {
     if (!problem && !problemsLoading && contestId && index) {
@@ -82,6 +65,8 @@ const ProblemDetailPage: React.FC = () => {
         if (offlineProblem) {
             setContent(offlineProblem.content);
         } else {
+            // This case should not happen in the new workflow, as we only view downloaded problems.
+            // As a fallback, we can try to fetch it live.
             const fetchedContent = await fetchProblemContent(problem.contestId, problem.index);
             setContent(fetchedContent);
         }
@@ -103,7 +88,7 @@ const ProblemDetailPage: React.FC = () => {
   }, [activeTab, content]);
   
   const renderedContent = useMemo(() => {
-    if (loadingContent || (downloading && !offline)) {
+    if (loadingContent) {
         return <LoadingSpinner text={`Loading Content...`} />;
     }
     if (!content) {
@@ -123,14 +108,14 @@ const ProblemDetailPage: React.FC = () => {
       default:
         return null;
     }
-  }, [content, activeTab, loadingContent, downloading, offline]);
+  }, [content, activeTab, loadingContent]);
 
   if (problemsLoading && !problem) return <LoadingSpinner text="Loading problem list..."/>
   if (!problem) {
     return (
       <div className="text-center text-gray-500 dark:text-gray-400">
         Problem not found.
-        <Link to="/" className="block mt-4 text-sky-500 hover:underline">Go back to search</Link>
+        <Link to="/" className="block mt-4 text-sky-500 hover:underline">Go back to problems list</Link>
       </div>
     );
   }
@@ -143,9 +128,6 @@ const ProblemDetailPage: React.FC = () => {
           <p className="text-gray-500 dark:text-gray-400 mt-1">Rating: {problem.rating} | ID: {problem.contestId}{problem.index}</p>
         </div>
         <div className="flex items-center gap-4 flex-shrink-0 ml-4">
-           <button onClick={handleDownloadClick} title={offline ? 'Delete from offline' : 'Download for offline'} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors" disabled={downloading}>
-             <DownloadIcon isDownloading={downloading} isOffline={offline} />
-          </button>
           <button onClick={handleBookmarkClick} title={bookmarked ? 'Remove bookmark' : 'Bookmark problem'} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors">
             <BookmarkIcon isBookmarked={bookmarked} />
           </button>
@@ -154,10 +136,10 @@ const ProblemDetailPage: React.FC = () => {
           </button>
           <button 
             onClick={() => navigate(-1)}
-            className="bg-white dark:bg-zinc-800 hover:bg-gray-100 dark:hover:bg-zinc-700 text-gray-700 dark:text-gray-200 font-semibold py-2 px-4 rounded-md transition-colors duration-200 flex items-center gap-2 border border-gray-300 dark:border-gray-600"
+            title="Go back"
+            className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors text-gray-700 dark:text-gray-200"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-            Back
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
           </button>
         </div>
       </div>

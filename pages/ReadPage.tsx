@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { useProblems } from '../context/ProblemContext';
 import { useStatusManager } from '../hooks/useStatusManager';
@@ -35,7 +36,7 @@ const ReadPage: React.FC = () => {
             className="h-5 w-5 rounded border-gray-300 dark:border-gray-600 text-sky-600 bg-gray-100 dark:bg-zinc-800 focus:ring-sky-500 focus:ring-offset-white dark:focus:ring-offset-zinc-900 cursor-pointer"
           />
           <label htmlFor="hide-read-problems" className="text-gray-700 dark:text-gray-300 cursor-pointer select-none">
-            Hide read problems from search
+            Hide read problems from list
           </label>
         </div>
       </div>
