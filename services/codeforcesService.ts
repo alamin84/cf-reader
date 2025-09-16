@@ -1,9 +1,8 @@
-
 import { Problem, Content } from '../types';
 
 const API_URL = 'https://codeforces.com/api/problemset.problems';
 // Switched to a more reliable CORS proxy to fix fetching issues.
-const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+const CORS_PROXY = 'https://corsproxy.io/?';
 
 interface CodeforcesResponse {
   status: string;
@@ -287,136 +286,93 @@ export const fetchEditorial = async (tutorialUrl: string, contestId: number, pro
             const text = (a.textContent || '').trim();
             const href = (a.getAttribute('href') || '');
 
-            // Priority 1: Href attribute is the most reliable identifier
             if (href.includes(`/contest/${contestId}/problem/${problemId}`) || href.endsWith(`/problem/${problemId}`)) {
                 return true;
             }
 
-            // Priority 2: Text matches common Codeforces patterns
             const fullProblemId = `${contestId}${problemId}`;
-            const textPatterns = [
-                `^${fullProblemId}`,             // e.g., "1234C"
-                `^${problemId}[\\s.:-]`,         // e.g., "C.", "C:", "C -"
-                `^${problemId}$`,                // e.g., "C"
-                `^Problem\\s+${problemId}\\b`    // e.g., "Problem C"
-            ];
+            const textPatterns = [ `^${fullProblemId}`, `^${problemId}[\\s.:-]`, `^${problemId}$`, `^Problem\\s+${problemId}\\b` ];
             const regex = new RegExp(textPatterns.join('|'), 'i');
             
-            if (regex.test(text)) {
-                return true;
-            }
-            
-            return false;
+            return regex.test(text);
         });
 
         if (!problemAnchor) {
             throw new Error(`Could not find a section for problem ${problemId} in the editorial.`);
         }
+        
+        let startNode: Element | null = problemAnchor;
+        while (startNode?.parentElement && startNode.parentElement !== editorialNode) {
+            startNode = startNode.parentElement;
+        }
 
         const solutionParts: Element[] = [];
-        const foundCodes: { title: string, content: string, language: 'cpp' | 'python' }[] = [];
+        let finalCode: EditorialPayload['code'] | null = null;
         
-        let startNode = problemAnchor.closest('p, h1, h2, h3, h4, h5, h6');
-        let currentNode = startNode ? startNode.nextElementSibling : null;
-
-        let parsingState: 'solution' | 'code' = 'solution';
+        let currentNode: Element | null = startNode; 
 
         while (currentNode) {
-            // Stop if we encounter a heading for a different problem or a horizontal rule.
-            const potentialHeaderLink = currentNode.querySelector('a');
-            if (potentialHeaderLink) {
-                const href = potentialHeaderLink.getAttribute('href') || '';
-                const isProblemLink = href.includes('/contest/') && href.includes('/problem/');
-                const isCurrentProblemLink = href.includes(`/contest/${contestId}/problem/${problemId}`);
-                
-                // This heuristic assumes that a link to another problem in a top-level element marks a new section.
-                if (isProblemLink && !isCurrentProblemLink) {
-                    const parentText = (currentNode.textContent || '').trim();
-                    const linkText = (potentialHeaderLink.textContent || '').trim();
-                    if (parentText.startsWith(linkText)) {
-                        break;
-                    }
-                }
-            }
-            
-            if (currentNode.tagName.toLowerCase() === 'hr') {
+            // If we've already found the code, stop parsing immediately.
+            if (finalCode) {
                 break;
             }
-
-            // Determine if the current node is a code spoiler
-            let isCodeNode = false;
-            let codeInfo = null;
 
             if (currentNode.classList.contains('spoiler')) {
                 const titleEl = currentNode.querySelector('.spoiler-title');
                 const contentEl = currentNode.querySelector('.spoiler-content');
                 const preTag = contentEl?.querySelector('pre');
 
-                if (titleEl && contentEl && preTag) {
+                if (titleEl && contentEl) {
                     const titleText = (titleEl.textContent || '').toLowerCase().trim();
-                    const isCpp = titleText.includes('c++') || titleText.includes('cpp');
-                    const isPython = titleText.includes('python');
-                    const isSolutionCode = /^solution\s*\d*$/.test(titleText);
-                    const isGenericCode = titleText.includes('code');
 
-                    if (isCpp || isPython || isSolutionCode || isGenericCode) {
-                        isCodeNode = true;
+                    // Define what makes a spoiler a "code spoiler"
+                    const isCodeKeyword = titleText.includes('c++') || titleText.includes('cpp') || titleText.includes('python') || titleText.includes('code') || titleText.includes('solution') || titleText.includes('Solution') || titleText.includes('Code') || titleText.includes('C++') || titleText.includes('CPP') || titleText.includes('Python');
+                    const isSolutionWithPre = /^solution\s*\d*$/.test(titleText) && preTag;
+                    
+                    if ((isCodeKeyword || isSolutionWithPre) && preTag) {
+                        // This is the definitive code block. Capture it and terminate.
                         const codeContent = preTag.textContent || '';
-                        const language = isCpp ? 'cpp' : isPython ? 'python' : 'cpp';
-                        codeInfo = {
-                            title: titleEl.textContent || 'Code',
-                            content: codeContent,
+                        const language: 'cpp' | 'python' = titleText.includes('python') ? 'python' : 'cpp';
+                        finalCode = {
+                            content: `// Source: ${titleEl.textContent || 'Code'}\n\n${codeContent.trim()}`,
                             language: language,
                         };
+                        // Break the loop immediately, ignoring everything after this code block.
+                        break;
+                    } else {
+                        // This is a text spoiler (e.g., hint, tutorial, editorial, or "solution" without code).
+                        // Unwrap it and add it to the solution text.
+                         const details = document.createElement('details');
+                         details.open = true;
+                         details.classList.add('editorial-spoiler');
+                         
+                         const summary = document.createElement('summary');
+                         summary.textContent = titleEl.textContent;
+                         details.appendChild(summary);
+
+                         const contentWrapper = document.createElement('div');
+                         contentWrapper.className = 'spoiler-content-wrapper';
+                         
+                         // Look for nested solution content in this order of preference:
+                         // 1. .ttypography .problem-statement div (most nested)
+                         // 2. .ttypography (direct typography content)  
+                         // 3. contentEl (fallback to spoiler content)
+                         let contentSourceEl = contentEl.querySelector('.ttypography .problem-statement > div');
+                         if (!contentSourceEl || !contentSourceEl.textContent?.trim()) {
+                             contentSourceEl = contentEl.querySelector('.ttypography');
+                         }
+                         if (!contentSourceEl || !contentSourceEl.textContent?.trim()) {
+                             contentSourceEl = contentEl;
+                         }
+                         
+                         contentWrapper.innerHTML = contentSourceEl.innerHTML;
+                         details.appendChild(contentWrapper);
+                         solutionParts.push(details);
                     }
                 }
-            }
-
-            // If we find a code node for the first time, switch state
-            if (isCodeNode && parsingState === 'solution') {
-                parsingState = 'code';
-            }
-
-            // Process based on state
-            if (parsingState === 'solution') {
-                // In solution state, append everything to solutionParts
-                if (currentNode.classList.contains('spoiler')) {
-                    const titleEl = currentNode.querySelector('.spoiler-title');
-                    const contentEl = currentNode.querySelector('.spoiler-content');
-                    if(titleEl && contentEl) {
-                        const details = document.createElement('details');
-                        details.open = true;
-                        details.classList.add('editorial-spoiler');
-                        
-                        const summary = document.createElement('summary');
-                        summary.textContent = titleEl.textContent;
-                        details.appendChild(summary);
-
-                        const contentWrapper = document.createElement('div');
-                        contentWrapper.className = 'spoiler-content-wrapper';
-                        
-                        let contentSourceEl = contentEl;
-                        // Handle cases where content is wrapped in another .ttypography div
-                        const nestedTypography = contentEl.querySelector('.ttypography');
-                        if (nestedTypography) {
-                           contentSourceEl = nestedTypography;
-                        }
-
-                        // More robustly copy the content instead of moving nodes
-                        contentWrapper.innerHTML = contentSourceEl.innerHTML;
-                        
-                        details.appendChild(contentWrapper);
-                        solutionParts.push(details);
-                    }
-                } else {
-                    solutionParts.push(currentNode);
-                }
-            } 
-            
-            if (isCodeNode && codeInfo) {
-                // If the node is code, always add it to foundCodes,
-                // regardless of whether we just switched state or were already in code state.
-                foundCodes.push(codeInfo);
+            } else {
+                // This is a regular element (p, h3, etc.) before the code block.
+                solutionParts.push(currentNode);
             }
             
             currentNode = currentNode.nextElementSibling;
@@ -426,8 +382,6 @@ export const fetchEditorial = async (tutorialUrl: string, contestId: number, pro
         solutionParts.forEach(part => solutionContainer.appendChild(part.cloneNode(true)));
         
         fixRelativeUrls(solutionContainer);
-
-        // Apply cleaning to the main container AND to the content of each spoiler
         cleanCodeforcesHtml(solutionContainer);
         solutionContainer.querySelectorAll('.editorial-spoiler .spoiler-content-wrapper').forEach(spoilerContent => {
             cleanCodeforcesHtml(spoilerContent);
@@ -435,20 +389,12 @@ export const fetchEditorial = async (tutorialUrl: string, contestId: number, pro
 
         let finalSolution = solutionContainer.innerHTML;
 
-        if (!finalSolution.trim()) {
+        if (!finalSolution.trim() && !finalCode) {
           finalSolution = `<p>Could not automatically parse the solution text for problem <b>${problemId}</b>. The editorial might use a non-standard format.</p>`;
         }
         
-        let finalCode: EditorialPayload['code'] = { content: `// Could not find code for problem ${problemId}.`, language: 'text' };
-
-        if (foundCodes.length > 0) {
-            const finalCodeContent = foundCodes.map(c => 
-                `// Source: ${c.title}\n\n${c.content.trim()}`
-            ).join('\n\n// --- End of Code Block ---\n\n');
-            
-            const finalCodeLanguage = foundCodes.some(c => c.language === 'cpp') ? 'cpp' : foundCodes[0].language;
-
-            finalCode = { content: finalCodeContent, language: finalCodeLanguage };
+        if (!finalCode) {
+            finalCode = { content: `// Could not find code for problem ${problemId}.`, language: 'text' };
         }
 
         return { solution: finalSolution, code: finalCode };

@@ -63,7 +63,10 @@ const ProblemDetailPage: React.FC = () => {
         const offlineProblem = offlineProblems[key];
 
         if (offlineProblem) {
-            setContent(offlineProblem.content);
+            // By deep copying the content, we prevent any potential downstream mutations
+            // from affecting the shared `offlineProblems` object in the context.
+            // This helps prevent bugs like circular dependencies when state is unexpectedly serialized.
+            setContent(JSON.parse(JSON.stringify(offlineProblem.content)));
         } else {
             // This case should not happen in the new workflow, as we only view downloaded problems.
             // As a fallback, we can try to fetch it live.
