@@ -28,7 +28,11 @@ const ProblemDetailPage: React.FC = () => {
   const { toggleBookmark, toggleRead, getStatus } = useStatusManager();
   const { offlineProblems } = useOffline();
   
-  const [problem, setProblem] = useState<Problem | null>(state?.problem || null);
+  // By deep-copying the problem object, we ensure the component works with its own isolated
+  // data, preventing any accidental mutations from affecting the global persisted state.
+  const [problem, setProblem] = useState<Problem | null>(
+    state?.problem ? JSON.parse(JSON.stringify(state.problem)) : null
+  );
   const [activeTab, setActiveTab] = useState('Problem');
   const [content, setContent] = useState<Content | {error: string} | null>(null);
   const [loadingContent, setLoadingContent] = useState(true);
@@ -50,7 +54,8 @@ const ProblemDetailPage: React.FC = () => {
   useEffect(() => {
     if (!problem && !problemsLoading && contestId && index) {
       const foundProblem = problems.find(p => p.contestId.toString() === contestId && p.index === index);
-      setProblem(foundProblem || null);
+      // Ensure the problem object is a deep copy to prevent state pollution.
+      setProblem(foundProblem ? JSON.parse(JSON.stringify(foundProblem)) : null);
     }
   }, [problems, problemsLoading, contestId, index, problem]);
   
