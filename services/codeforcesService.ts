@@ -264,122 +264,123 @@ interface EditorialPayload {
   };
 }
 
+const isProblemAnchor = (el: Element, contestId: number, problemId: string): boolean => {
+    if (el.tagName !== 'A') return false;
+    const href = (el.getAttribute('href') || '');
+    return href.includes(`/contest/${contestId}/problem/${problemId}`) || href.endsWith(`/problem/${problemId}`);
+}
+
+/**
+ * Pre-processes spoilers to transform complex nested structures into a simple,
+ * uniform format. This allows the main parser to treat all text spoilers equally.
+ * @param editorialNode The root element of the editorial content.
+ */
+const normalizeSpoilers = (editorialNode: Element): void => {
+    editorialNode.querySelectorAll('.spoiler').forEach(spoiler => {
+        const contentEl = spoiler.querySelector('.spoiler-content');
+        if (!contentEl) return;
+
+        // Signature of a complex spoiler is a nested .problem-statement div.
+        const nestedProblemStatement = contentEl.querySelector('.problem-statement');
+        if (nestedProblemStatement) {
+            // Unwrapping logic: The actual content is usually inside another div
+            // which is the first child of the .problem-statement div.
+            const contentWrapper = nestedProblemStatement.firstElementChild;
+            if (contentWrapper) {
+                // Replace the spoiler's entire complex content with just the unwrapped content.
+                contentEl.innerHTML = contentWrapper.innerHTML;
+            } else {
+                 // Fallback if the structure is slightly different (e.g., no extra wrapper div).
+                contentEl.innerHTML = nestedProblemStatement.innerHTML;
+            }
+        }
+    });
+};
+
+
 export const fetchEditorial = async (tutorialUrl: string, contestId: number, problemId: string): Promise<EditorialPayload | { error: string }> => {
     try {
         const response = await fetchWithTimeout(`${CORS_PROXY}${encodeURIComponent(tutorialUrl)}`);
-        if (!response.ok) {
-            throw new Error(`Network response was not ok: ${response.statusText}`);
-        }
+        if (!response.ok) throw new Error(`Network response was not ok: ${response.statusText}`);
+        
         const html = await response.text();
-
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
         const editorialNode = doc.querySelector('.ttypography');
 
-        if (!editorialNode) {
-            throw new Error('Could not find editorial content (.ttypography) in the fetched HTML.');
-        }
+        if (!editorialNode) throw new Error('Could not find editorial content (.ttypography) in the fetched HTML.');
 
-        const problemLinks = Array.from(editorialNode.querySelectorAll('a'));
-        
-        const problemAnchor = problemLinks.find(a => {
-            const text = (a.textContent || '').trim();
-            const href = (a.getAttribute('href') || '');
+        // **Normalization Step:** Pre-process the DOM to simplify all complex spoilers.
+        normalizeSpoilers(editorialNode);
 
-            if (href.includes(`/contest/${contestId}/problem/${problemId}`) || href.endsWith(`/problem/${problemId}`)) {
-                return true;
-            }
-
-            const fullProblemId = `${contestId}${problemId}`;
-            const textPatterns = [ `^${fullProblemId}`, `^${problemId}[\\s.:-]`, `^${problemId}$`, `^Problem\\s+${problemId}\\b` ];
-            const regex = new RegExp(textPatterns.join('|'), 'i');
-            
-            return regex.test(text);
-        });
-
-        if (!problemAnchor) {
-            throw new Error(`Could not find a section for problem ${problemId} in the editorial.`);
-        }
+        const problemAnchor = Array.from(editorialNode.querySelectorAll('a')).find(a => isProblemAnchor(a, contestId, problemId));
+        if (!problemAnchor) throw new Error(`Could not find a section for problem ${problemId} in the editorial.`);
         
         let startNode: Element | null = problemAnchor;
         while (startNode?.parentElement && startNode.parentElement !== editorialNode) {
             startNode = startNode.parentElement;
         }
 
-        const solutionParts: Element[] = [];
+        if (!startNode) throw new Error(`Could not establish a starting node for problem ${problemId}.`);
+
+        let solutionParts: Element[] = [];
         let finalCode: EditorialPayload['code'] | null = null;
-        
-        let currentNode: Element | null = startNode; 
+        let currentNode: Element | null = startNode;
 
         while (currentNode) {
-            // If we've already found the code, stop parsing immediately.
-            if (finalCode) {
-                break;
-            }
+            if (finalCode) break; // Stop after finding the first code block.
 
             if (currentNode.classList.contains('spoiler')) {
                 const titleEl = currentNode.querySelector('.spoiler-title');
                 const contentEl = currentNode.querySelector('.spoiler-content');
-                const preTag = contentEl?.querySelector('pre');
-
-                if (titleEl && contentEl) {
-                    const titleText = (titleEl.textContent || '').toLowerCase().trim();
-
-                    // Define what makes a spoiler a "code spoiler"
-                    const isCodeKeyword = titleText.includes('c++') || titleText.includes('cpp') || titleText.includes('python') || titleText.includes('code') || titleText.includes('solution') || titleText.includes('Solution') || titleText.includes('Code') || titleText.includes('C++') || titleText.includes('CPP') || titleText.includes('Python');
-                    const isSolutionWithPre = /^solution\s*\d*$/.test(titleText) && preTag;
-                    
-                    if ((isCodeKeyword || isSolutionWithPre) && preTag) {
-                        // This is the definitive code block. Capture it and terminate.
-                        const codeContent = preTag.textContent || '';
-                        const language: 'cpp' | 'python' = titleText.includes('python') ? 'python' : 'cpp';
-                        finalCode = {
-                            content: `// Source: ${titleEl.textContent || 'Code'}\n\n${codeContent.trim()}`,
-                            language: language,
-                        };
-                        // Break the loop immediately, ignoring everything after this code block.
-                        break;
-                    } else {
-                        // This is a text spoiler (e.g., hint, tutorial, editorial, or "solution" without code).
-                        // Unwrap it and add it to the solution text.
-                         const details = document.createElement('details');
-                         details.open = true;
-                         details.classList.add('editorial-spoiler');
-                         
-                         const summary = document.createElement('summary');
-                         summary.textContent = titleEl.textContent;
-                         details.appendChild(summary);
-
-                         const contentWrapper = document.createElement('div');
-                         contentWrapper.className = 'spoiler-content-wrapper';
-                         
-                         // Look for nested solution content in this order of preference:
-                         // 1. .ttypography .problem-statement div (most nested)
-                         // 2. .ttypography (direct typography content)  
-                         // 3. contentEl (fallback to spoiler content)
-                         let contentSourceEl = contentEl.querySelector('.ttypography .problem-statement > div');
-                         if (!contentSourceEl || !contentSourceEl.textContent?.trim()) {
-                             contentSourceEl = contentEl.querySelector('.ttypography');
-                         }
-                         if (!contentSourceEl || !contentSourceEl.textContent?.trim()) {
-                             contentSourceEl = contentEl;
-                         }
-                         
-                         contentWrapper.innerHTML = contentSourceEl.innerHTML;
-                         details.appendChild(contentWrapper);
-                         solutionParts.push(details);
-                    }
+                if (!titleEl || !contentEl) {
+                    currentNode = currentNode.nextElementSibling;
+                    continue;
                 }
+                
+                const titleText = (titleEl.textContent || '').toLowerCase().trim();
+                const preTag = contentEl.querySelector('pre');
+                
+                // A spoiler is code if it has a <pre> tag & its title suggests code.
+                const isCode = (titleText.includes('c++') || titleText.includes('cpp') || titleText.includes('python') || titleText.includes('code') || titleText.includes('solution')) && preTag;
+
+                if (isCode) {
+                    const language: 'cpp' | 'python' = titleText.includes('python') ? 'python' : 'cpp';
+                    finalCode = {
+                        content: `// Source: ${titleEl.textContent || 'Code'}\n\n${(preTag.textContent || '').trim()}`,
+                        language: language,
+                    };
+                    break; 
+                }
+                
+                // After normalization, all other spoilers are treated as simple text spoilers (hints, solution text, etc.).
+                const details = document.createElement('details');
+                details.open = true;
+                details.classList.add('editorial-spoiler');
+                const summary = document.createElement('summary');
+                summary.textContent = titleEl.textContent;
+                details.appendChild(summary);
+                const contentWrapper = document.createElement('div');
+                contentWrapper.className = 'spoiler-content-wrapper';
+                contentWrapper.innerHTML = contentEl.innerHTML;
+                details.appendChild(contentWrapper);
+                solutionParts.push(details);
+
             } else {
-                // This is a regular element (p, h3, etc.) before the code block.
+                // It's a regular element (like <p> or <h3>), part of the solution text.
                 solutionParts.push(currentNode);
             }
-            
             currentNode = currentNode.nextElementSibling;
         }
+        
+        if (!finalCode && solutionParts.length <= 1 && solutionParts[0] === startNode) {
+             throw new Error(`Could not find tutorial content for problem ${problemId} after its title.`);
+        }
 
+        // Combine all collected solution parts into a single container for cleaning.
         const solutionContainer = document.createElement('div');
-        solutionParts.forEach(part => solutionContainer.appendChild(part.cloneNode(true)));
+        // We skip the first element because it's the title node itself.
+        solutionParts.slice(1).forEach(part => solutionContainer.appendChild(part.cloneNode(true)));
         
         fixRelativeUrls(solutionContainer);
         cleanCodeforcesHtml(solutionContainer);
